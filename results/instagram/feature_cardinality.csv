@@ -1,0 +1,13 @@
+Feature,Unique_Values
+profile pic,2
+nums/length username,58
+fullname words,11
+nums/length fullname,27
+name==username,2
+description length,114
+external URL,2
+private,2
+#posts,211
+#followers,435
+#follows,468
+fake,2
