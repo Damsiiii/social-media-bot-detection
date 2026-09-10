@@ -8,6 +8,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.preprocessing import StandardScaler
+from PIL import Image
 
 # Fake Comment Detector (RoBERTa) - loaded lazily, only when that tab is opened
 try:
@@ -20,7 +21,9 @@ except Exception:
 # Hosted on Hugging Face Hub - downloaded & cached automatically at runtime,
 # so the 300+ MB weights file never needs to be committed to GitHub.
 COMMENT_MODEL_REPO = "Tharanya06/Bot-Deduction"
-COMMENT_MODEL_SUBFOLDER = "models/fake-comment-detector"
+# The model is stored in the main repo (no subfolder needed) OR in a subfolder
+# The transformers library will automatically resolve the correct path
+COMMENT_MODEL_SUBFOLDER = None  # Will load from main repo root
 
 # Official Logos (SVG URLs)
 INSTAGRAM_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/e/e7/Instagram_logo_2016.svg"
@@ -38,6 +41,35 @@ st.set_page_config(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 DATA_DIR = os.path.join(BASE_DIR, "data")
+
+# Path to graphs directory (in the parent directory of prototype)
+GRAPHS_DIR = os.path.join(os.path.dirname(BASE_DIR), "graphs")
+INSTAGRAM_GRAPHS_DIR = os.path.join(GRAPHS_DIR, "instagram")
+TWITTER_GRAPHS_DIR = os.path.join(GRAPHS_DIR, "twitter")
+FAKE_COMMENT_GRAPHS_DIR = os.path.join(GRAPHS_DIR, "fake_comment_detection")
+
+# Helper function to display graph images
+@st.cache_data
+def load_graph_image(graph_path):
+    """Load and return a graph image from file."""
+    if os.path.exists(graph_path):
+        return Image.open(graph_path)
+    return None
+
+def display_graph_from_file(graph_path, caption="", width=None):
+    """Display a graph image file in Streamlit."""
+    img = load_graph_image(graph_path)
+    if img is not None:
+        st.image(img, caption=caption, use_container_width=True if width is None else False, width=width)
+    else:
+        st.warning(f"Graph not found: {graph_path}")
+
+def get_available_graphs(graphs_dir):
+    """Get list of available PNG graphs in a directory."""
+    if os.path.exists(graphs_dir):
+        graphs = sorted([f for f in os.listdir(graphs_dir) if f.endswith('.png')])
+        return graphs
+    return []
 
 INSTAGRAM_FEATURES = [
     "profile pic", "nums/length username", "fullname words",
@@ -164,21 +196,39 @@ def load_twitter_data():
 def load_instagram_models():
     bundle = {}
     ig_dir = os.path.join(MODELS_DIR, "instagram")
+    
+    # Try to load ANN model
     try:
         import tensorflow as tf
         bundle["ann"] = tf.keras.models.load_model(os.path.join(ig_dir, "instagram_ann.keras"))
-    except Exception:
+    except ImportError:
+        st.warning("TensorFlow not available - ANN model skipped")
         bundle["ann"] = None
+    except Exception as e:
+        st.warning(f"Could not load ANN model: {e}")
+        bundle["ann"] = None
+    
+    # Load traditional ML models
     for key, fname in [("xgb", "xgboost.pkl"), ("rf", "random_forest.pkl"), ("lr", "logistic_regression.pkl")]:
         try:
-            bundle[key] = joblib.load(os.path.join(ig_dir, fname))
-        except Exception:
+            model_path = os.path.join(ig_dir, fname)
+            if os.path.exists(model_path):
+                bundle[key] = joblib.load(model_path)
+            else:
+                st.warning(f"Instagram {key.upper()} model file not found: {fname}")
+                bundle[key] = None
+        except Exception as e:
+            st.warning(f"Could not load Instagram {key.upper()} model: {e}")
             bundle[key] = None
+    
+    # Load scaler for feature normalization
     try:
         df = load_instagram_data()
         bundle["scaler"] = StandardScaler().fit(df[INSTAGRAM_FEATURES])
-    except Exception:
+    except Exception as e:
+        st.warning(f"Could not create scaler: {e}")
         bundle["scaler"] = None
+    
     return bundle
 
 
@@ -186,17 +236,29 @@ def load_instagram_models():
 def load_twitter_models():
     bundle = {}
     tw_dir = os.path.join(MODELS_DIR, "twitter")
+    
+    # Load ML models
     for key, fname in [("xgb", "xgboost.pkl"), ("rf", "random_forest.pkl"), ("lr", "logistic_regression.pkl"),
                         ("nlp", "nlp_model.pkl"), ("tfidf", "tfidf_vectorizer.pkl")]:
         try:
-            bundle[key] = joblib.load(os.path.join(tw_dir, fname))
-        except Exception:
+            model_path = os.path.join(tw_dir, fname)
+            if os.path.exists(model_path):
+                bundle[key] = joblib.load(model_path)
+            else:
+                st.warning(f"Twitter {key.upper()} model file not found: {fname}")
+                bundle[key] = None
+        except Exception as e:
+            st.warning(f"Could not load Twitter {key.upper()} model: {e}")
             bundle[key] = None
+    
+    # Load scaler for feature normalization
     try:
         df = load_twitter_data()
         bundle["scaler"] = StandardScaler().fit(df[TWITTER_FEATURES])
-    except Exception:
+    except Exception as e:
+        st.warning(f"Could not create Twitter scaler: {e}")
         bundle["scaler"] = None
+    
     return bundle
 
 
@@ -234,12 +296,20 @@ def load_comment_model():
     if not TRANSFORMERS_AVAILABLE:
         return None, None
     try:
-        tokenizer = AutoTokenizer.from_pretrained(COMMENT_MODEL_REPO, subfolder=COMMENT_MODEL_SUBFOLDER)
-        model = AutoModelForSequenceClassification.from_pretrained(COMMENT_MODEL_REPO, subfolder=COMMENT_MODEL_SUBFOLDER)
+        # Try loading without subfolder first (model at repo root)
+        if COMMENT_MODEL_SUBFOLDER is None:
+            tokenizer = AutoTokenizer.from_pretrained(COMMENT_MODEL_REPO, trust_remote_code=True)
+            model = AutoModelForSequenceClassification.from_pretrained(COMMENT_MODEL_REPO, trust_remote_code=True)
+        else:
+            # Try loading with subfolder
+            tokenizer = AutoTokenizer.from_pretrained(COMMENT_MODEL_REPO, subfolder=COMMENT_MODEL_SUBFOLDER, trust_remote_code=True)
+            model = AutoModelForSequenceClassification.from_pretrained(COMMENT_MODEL_REPO, subfolder=COMMENT_MODEL_SUBFOLDER, trust_remote_code=True)
+        
         model.eval()
         return tokenizer, model
     except Exception as e:
         st.error(f"Could not load the fake comment model from Hugging Face: {e}")
+        st.info(f"Model repo: https://huggingface.co/{COMMENT_MODEL_REPO}\nMake sure you have internet access for first-time model download.")
         return None, None
 
 
@@ -397,40 +467,76 @@ if "Instagram" in platform:
     with tab_eda:
         st.subheader("Feature Analysis & Distributions")
 
-        col_feat1, col_feat2 = st.columns(2)
+        # Display available distribution graphs
+        st.markdown("#### Key Distributions")
+        eda_col1, eda_col2 = st.columns(2)
+        
+        with eda_col1:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "01_target_distribution.png"))
+            if img:
+                st.image(img, caption="Target Distribution (Real vs Bot)", use_container_width=True)
+        
+        with eda_col2:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "distribution_followers.png"))
+            if img:
+                st.image(img, caption="Follower Count Distribution", use_container_width=True)
 
-        with col_feat1:
-            selected_feature = st.selectbox(
-                "Select Numerical Feature for Distribution Analysis:",
-                ["#followers", "#follows", "#posts", "description length", "nums/length username"]
-            )
-            fig_box = px.box(
-                df_insta, x='fake', y=selected_feature, color='fake',
-                labels={'fake': 'Account Type (0=Real, 1=Bot)'},
-                title=f"Distribution of {selected_feature} by Class",
-                color_discrete_sequence=['#2E7D32', '#C2185B']
-            )
-            st.plotly_chart(fig_box, use_container_width=True)
+        eda_col3, eda_col4 = st.columns(2)
+        
+        with eda_col3:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "distribution_follows.png"))
+            if img:
+                st.image(img, caption="Following Count Distribution", use_container_width=True)
+        
+        with eda_col4:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "distribution_posts.png"))
+            if img:
+                st.image(img, caption="Posts Count Distribution", use_container_width=True)
 
-        with col_feat2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            fig_hist = px.histogram(
-                df_insta, x=selected_feature, color='fake', marginal="rug",
-                title=f"Histogram/KDE Overlay for {selected_feature}",
-                color_discrete_sequence=['#4CAF50', '#FF5252'],
-                barmode="overlay"
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
+        eda_col5, eda_col6 = st.columns(2)
+        
+        with eda_col5:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "distribution_description_length.png"))
+            if img:
+                st.image(img, caption="Description Length Distribution", use_container_width=True)
+        
+        with eda_col6:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "distribution_username_digits.png"))
+            if img:
+                st.image(img, caption="Username Digits Distribution", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Binary Feature Analysis")
+        
+        binary_col1, binary_col2 = st.columns(2)
+        
+        with binary_col1:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "binary_profile_pic.png"))
+            if img:
+                st.image(img, caption="Profile Picture Feature", use_container_width=True)
+        
+        with binary_col2:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "binary_external_url.png"))
+            if img:
+                st.image(img, caption="External URL Feature", use_container_width=True)
+
+        binary_col3, binary_col4 = st.columns(2)
+        
+        with binary_col3:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "binary_private.png"))
+            if img:
+                st.image(img, caption="Private Account Feature", use_container_width=True)
+        
+        with binary_col4:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "binary_name_equals_username.png"))
+            if img:
+                st.image(img, caption="Name Equals Username Feature", use_container_width=True)
 
         st.markdown("---")
         st.subheader("Feature Correlation Heatmap")
-        corr = df_insta.corr(numeric_only=True)
-        fig_corr = px.imshow(
-            corr, text_auto=".2f", aspect="auto",
-            color_continuous_scale="Viridis",
-            title="Pearson Correlation Matrix"
-        )
-        st.plotly_chart(fig_corr, use_container_width=True)
+        img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "correlation_heatmap.png"))
+        if img:
+            st.image(img, caption="Pearson Correlation Matrix", use_container_width=True)
 
     # --- TAB 3: BENCHMARKS (real held-out test set numbers from the training notebooks) ---
     with tab_models:
@@ -461,6 +567,83 @@ if "Instagram" in platform:
             st.dataframe(results_df.style.highlight_max(axis=0, subset=["Accuracy", "F1-Score", "Precision", "Recall"], color='#2E7D32'),
                          use_container_width=True, hide_index=True)
             st.success("Best Model: XGBoost achieved the highest performance — 92.8% accuracy, 92.4% F1-score.")
+
+        st.markdown("---")
+        st.subheader("Model Comparison Visualizations")
+        
+        # Display model performance graphs
+        comp_col1, comp_col2 = st.columns(2)
+        
+        with comp_col1:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "model_accuracy_comparison.png"))
+            if img:
+                st.image(img, caption="Accuracy Comparison", use_container_width=True)
+        
+        with comp_col2:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "model_f1_comparison.png"))
+            if img:
+                st.image(img, caption="F1-Score Comparison", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Confusion Matrices")
+        
+        cf_col1, cf_col2 = st.columns(2)
+        
+        with cf_col1:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "random_forest_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="Random Forest Confusion Matrix", use_container_width=True)
+        
+        with cf_col2:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "xgboost_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="XGBoost Confusion Matrix", use_container_width=True)
+
+        cf_col3, cf_col4 = st.columns(2)
+        
+        with cf_col3:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "logistic_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="Logistic Regression Confusion Matrix", use_container_width=True)
+        
+        with cf_col4:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "ann_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="ANN Confusion Matrix", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Feature Importance Analysis")
+        
+        fi_col1, fi_col2 = st.columns(2)
+        
+        with fi_col1:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "random_forest_feature_importance.png"))
+            if img:
+                st.image(img, caption="Random Forest Feature Importance", use_container_width=True)
+        
+        with fi_col2:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "xgboost_feature_importance.png"))
+            if img:
+                st.image(img, caption="XGBoost Feature Importance", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("ROC Curve & Training Analysis")
+        
+        roc_col1, roc_col2 = st.columns(2)
+        
+        with roc_col1:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "roc_curve_comparison.png"))
+            if img:
+                st.image(img, caption="ROC Curve Comparison", use_container_width=True)
+        
+        with roc_col2:
+            img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "ann_loss.png"))
+            if img:
+                st.image(img, caption="ANN Training Loss", use_container_width=True)
+        
+        ann_acc_img = load_graph_image(os.path.join(INSTAGRAM_GRAPHS_DIR, "ann_accuracy.png"))
+        if ann_acc_img:
+            st.image(ann_acc_img, caption="ANN Training Accuracy", use_container_width=True)
 
     # --- TAB 4: PREDICTOR (wired to the real trained models) ---
     with tab_inference:
@@ -626,41 +809,82 @@ elif "Twitter" in platform:
     with tab_eda:
         st.subheader("Feature Analysis & Distributions")
 
-        col_feat1, col_feat2 = st.columns(2)
+        # Display available distribution graphs
+        st.markdown("#### Key Distributions")
+        eda_col1, eda_col2 = st.columns(2)
+        
+        with eda_col1:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "01_target_distribution.png"))
+            if img:
+                st.image(img, caption="Target Distribution (Human vs Bot)", use_container_width=True)
+        
+        with eda_col2:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "distribution_followers.png"))
+            if img:
+                st.image(img, caption="Follower Count Distribution", use_container_width=True)
 
-        with col_feat1:
-            selected_feature = st.selectbox(
-                "Select Numerical Feature for Distribution Analysis:",
-                ["followers_count", "friends_count", "statuses_count", "favourites_count",
-                 "description_length", "followers_friends_ratio"]
-            )
-            fig_box = px.box(
-                df_twitter, x='fake', y=selected_feature, color='fake',
-                labels={'fake': 'Account Type (0=Human, 1=Bot)'},
-                title=f"Distribution of {selected_feature} by Class",
-                color_discrete_sequence=['#1DA1F2', '#E0245E']
-            )
-            st.plotly_chart(fig_box, use_container_width=True)
+        eda_col3, eda_col4 = st.columns(2)
+        
+        with eda_col3:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "distribution_friends.png"))
+            if img:
+                st.image(img, caption="Following Count Distribution", use_container_width=True)
+        
+        with eda_col4:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "distribution_statuses.png"))
+            if img:
+                st.image(img, caption="Tweet Count Distribution", use_container_width=True)
 
-        with col_feat2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            fig_hist = px.histogram(
-                df_twitter, x=selected_feature, color='fake', marginal="rug",
-                title=f"Histogram/KDE Overlay for {selected_feature}",
-                color_discrete_sequence=['#1DA1F2', '#E0245E'],
-                barmode="overlay"
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
+        eda_col5, eda_col6 = st.columns(2)
+        
+        with eda_col5:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "distribution_favourites.png"))
+            if img:
+                st.image(img, caption="Favorites/Likes Distribution", use_container_width=True)
+        
+        with eda_col6:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "distribution_description_length.png"))
+            if img:
+                st.image(img, caption="Bio Length Distribution", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Binary Feature Analysis")
+        
+        binary_col1, binary_col2 = st.columns(2)
+        
+        with binary_col1:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "binary_verified.png"))
+            if img:
+                st.image(img, caption="Verified Badge Feature", use_container_width=True)
+        
+        with binary_col2:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "binary_protected.png"))
+            if img:
+                st.image(img, caption="Protected Account Feature", use_container_width=True)
+
+        binary_col3, binary_col4 = st.columns(2)
+        
+        with binary_col3:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "binary_default_profile.png"))
+            if img:
+                st.image(img, caption="Default Profile Theme Feature", use_container_width=True)
+        
+        with binary_col4:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "binary_default_profile_image.png"))
+            if img:
+                st.image(img, caption="Default Profile Picture Feature", use_container_width=True)
 
         st.markdown("---")
         st.subheader("Feature Correlation Heatmap")
-        corr = df_twitter.corr(numeric_only=True)
-        fig_corr = px.imshow(
-            corr, text_auto=".2f", aspect="auto",
-            color_continuous_scale="IceFire",
-            title="Pearson Correlation Matrix"
-        )
-        st.plotly_chart(fig_corr, use_container_width=True)
+        img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "correlation_heatmap.png"))
+        if img:
+            st.image(img, caption="Pearson Correlation Matrix", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Advanced NLP Analysis")
+        img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "nlp_top_tfidf_features.png"))
+        if img:
+            st.image(img, caption="Top TF-IDF Features (Bio Text Analysis)", use_container_width=True)
 
     # --- TAB 3: BENCHMARKS (real held-out test set numbers from the training notebooks) ---
     with tab_models:
@@ -692,6 +916,79 @@ elif "Twitter" in platform:
                          use_container_width=True, hide_index=True)
             st.info("Best Model: Random Forest — 75.9% accuracy, 69.7% F1-score. Twitter bot detection is "
                     "noticeably harder than Instagram here; bio text alone (TF-IDF) is close to chance (60%).")
+
+        st.markdown("---")
+        st.subheader("Model Comparison Visualizations")
+        
+        # Display model performance graphs
+        comp_col1, comp_col2 = st.columns(2)
+        
+        with comp_col1:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "twitter_accuracy_comparison.png"))
+            if img:
+                st.image(img, caption="Accuracy Comparison", use_container_width=True)
+        
+        with comp_col2:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "twitter_f1_comparison.png"))
+            if img:
+                st.image(img, caption="F1-Score Comparison", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Confusion Matrices")
+        
+        cf_col1, cf_col2 = st.columns(2)
+        
+        with cf_col1:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "random_forest_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="Random Forest Confusion Matrix", use_container_width=True)
+        
+        with cf_col2:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "xgboost_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="XGBoost Confusion Matrix", use_container_width=True)
+
+        cf_col3, cf_col4 = st.columns(2)
+        
+        with cf_col3:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "logistic_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="Logistic Regression Confusion Matrix", use_container_width=True)
+        
+        with cf_col4:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "nlp_confusion_matrix.png"))
+            if img:
+                st.image(img, caption="NLP TF-IDF Confusion Matrix", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Feature Importance Analysis")
+        
+        fi_col1, fi_col2 = st.columns(2)
+        
+        with fi_col1:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "random_forest_feature_importance.png"))
+            if img:
+                st.image(img, caption="Random Forest Feature Importance", use_container_width=True)
+        
+        with fi_col2:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "xgboost_feature_importance.png"))
+            if img:
+                st.image(img, caption="XGBoost Feature Importance", use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("ROC Curve & Deep Learning Analysis")
+        
+        roc_col1, roc_col2 = st.columns(2)
+        
+        with roc_col1:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "roc_curve_comparison.png"))
+            if img:
+                st.image(img, caption="ROC Curve Comparison", use_container_width=True)
+        
+        with roc_col2:
+            img = load_graph_image(os.path.join(TWITTER_GRAPHS_DIR, "gnn_training_loss.png"))
+            if img:
+                st.image(img, caption="GNN Model Training Loss", use_container_width=True)
 
     # --- TAB 4: PREDICTOR (redesigned to match the real 19-feature schema the models were trained on) ---
     with tab_inference:
@@ -819,11 +1116,37 @@ else:
             "- **Hosting:** weights are downloaded on first use from the project's Hugging Face model repo "
             "and cached locally, so they don't need to live inside the GitHub repo."
         )
-        st.caption(f"Source: huggingface.co/{COMMENT_MODEL_REPO} (subfolder: `{COMMENT_MODEL_SUBFOLDER}`)")
+        st.markdown("---")
+        st.subheader("Training & Performance Analysis")
+        
+        st.caption(f"Source: huggingface.co/{COMMENT_MODEL_REPO}")
 
         if not TRANSFORMERS_AVAILABLE:
             st.warning("`transformers` / `torch` are not installed in this environment — add them to "
                        "`requirements.txt` to enable this tab (see updated requirements.txt).")
+
+        st.markdown("---")
+        st.subheader("Training & Performance Analysis")
+        
+        # Display training graphs
+        train_col1, train_col2 = st.columns(2)
+        
+        with train_col1:
+            img = load_graph_image(os.path.join(FAKE_COMMENT_GRAPHS_DIR, "01_class_distribution.png"))
+            if img:
+                st.image(img, caption="Training Dataset Class Distribution", use_container_width=True)
+        
+        with train_col2:
+            img = load_graph_image(os.path.join(FAKE_COMMENT_GRAPHS_DIR, "02_word_count_distribution.png"))
+            if img:
+                st.image(img, caption="Comment Word Count Distribution", use_container_width=True)
+
+        train_col3, train_col4 = st.columns([1.2, 1])
+        
+        with train_col3:
+            img = load_graph_image(os.path.join(FAKE_COMMENT_GRAPHS_DIR, "03_training_validation_loss.png"))
+            if img:
+                st.image(img, caption="Training & Validation Loss", use_container_width=True)
 
     # --- TAB 2: SINGLE COMMENT CHECKER ---
     with tab_single:
