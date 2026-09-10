@@ -20,7 +20,7 @@ except Exception:
 
 # Hosted on Hugging Face Hub - downloaded & cached automatically at runtime,
 # so the 300+ MB weights file never needs to be committed to GitHub.
-COMMENT_MODEL_REPO = "Tharanya06/Bot-Deduction"
+COMMENT_MODEL_REPO = "Tharanya06/Bot_Deduction"
 # The model is stored in the main repo (no subfolder needed) OR in a subfolder
 # The transformers library will automatically resolve the correct path
 COMMENT_MODEL_SUBFOLDER = None  # Will load from main repo root
