@@ -1,0 +1,6 @@
+Metric,Count
+Total TSV Entries,2652
+Unique User IDs,2633
+Duplicate Entries,19
+Conflicting User IDs Dropped,19
+Cleaned Unique Annotations,2614

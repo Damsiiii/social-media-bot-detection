@@ -1,0 +1,12 @@
+Feature,Importance
+#posts,0.3392386
+profile pic,0.16272324
+nums/length username,0.123797886
+#followers,0.10201017
+description length,0.07857364
+fullname words,0.045585744
+#follows,0.043407235
+private,0.040777292
+external URL,0.03327775
+nums/length fullname,0.030608326
+name==username,0.0

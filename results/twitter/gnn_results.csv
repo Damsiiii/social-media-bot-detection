@@ -1,0 +1,2 @@
+Model,Category,Accuracy,Precision,Recall,F1 Score,Nodes,Edges
+Graph Convolutional Network (GCN),GNN,0.7221,0.7391,0.5561,0.6347,2465,12325
