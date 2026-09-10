@@ -18,12 +18,9 @@ try:
 except Exception:
     TRANSFORMERS_AVAILABLE = False
 
-# Hosted on Hugging Face Hub - downloaded & cached automatically at runtime,
-# so the 300+ MB weights file never needs to be committed to GitHub.
 COMMENT_MODEL_REPO = "Tharanya06/Bot_Deduction"
-# The model is stored in the main repo (no subfolder needed) OR in a subfolder
-# The transformers library will automatically resolve the correct path
-COMMENT_MODEL_SUBFOLDER = None  # Will load from main repo root
+# The model files (config.json, model.safetensors, etc.) are located in the fake-comment-detector subfolder
+COMMENT_MODEL_SUBFOLDER = "fake-comment-detector"
 
 # Official Logos (SVG URLs)
 INSTAGRAM_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/e/e7/Instagram_logo_2016.svg"
@@ -295,22 +292,35 @@ def engineer_twitter_row(screen_name, name, description, followers_count, friend
 def load_comment_model():
     if not TRANSFORMERS_AVAILABLE:
         return None, None
-    try:
-        # Try loading without subfolder first (model at repo root)
-        if COMMENT_MODEL_SUBFOLDER is None:
-            tokenizer = AutoTokenizer.from_pretrained(COMMENT_MODEL_REPO, trust_remote_code=True)
-            model = AutoModelForSequenceClassification.from_pretrained(COMMENT_MODEL_REPO, trust_remote_code=True)
-        else:
-            # Try loading with subfolder
-            tokenizer = AutoTokenizer.from_pretrained(COMMENT_MODEL_REPO, subfolder=COMMENT_MODEL_SUBFOLDER, trust_remote_code=True)
-            model = AutoModelForSequenceClassification.from_pretrained(COMMENT_MODEL_REPO, subfolder=COMMENT_MODEL_SUBFOLDER, trust_remote_code=True)
-        
-        model.eval()
-        return tokenizer, model
-    except Exception as e:
-        st.error(f"Could not load the fake comment model from Hugging Face: {e}")
-        st.info(f"Model repo: https://huggingface.co/{COMMENT_MODEL_REPO}\nMake sure you have internet access for first-time model download.")
-        return None, None
+
+    # Subfolders to try (priority: configured subfolder, then fallback options)
+    candidate_subfolders = [
+        COMMENT_MODEL_SUBFOLDER,          # "fake-comment-detector"
+        "models/fake-comment-detector",
+        None                              # repo root fallback
+    ]
+    
+    last_error = None
+    for sub in candidate_subfolders:
+        try:
+            load_kwargs = {"trust_remote_code": True}
+            if sub:
+                load_kwargs["subfolder"] = sub
+            
+            tokenizer = AutoTokenizer.from_pretrained(COMMENT_MODEL_REPO, **load_kwargs)
+            model = AutoModelForSequenceClassification.from_pretrained(COMMENT_MODEL_REPO, **load_kwargs)
+            
+            # Ensure model is in eval mode on CPU for Streamlit Community Cloud
+            model.to(torch.device("cpu"))
+            model.eval()
+            return tokenizer, model
+        except Exception as e:
+            last_error = e
+            continue
+
+    st.error(f"Could not load the fake comment model from Hugging Face: {last_error}")
+    st.info(f"Model repo: https://huggingface.co/{COMMENT_MODEL_REPO}/tree/main/{COMMENT_MODEL_SUBFOLDER}\nMake sure your environment has internet access and required packages (`transformers`, `torch`, `safetensors`).")
+    return None, None
 
 
 def predict_comment(text: str, tokenizer, model):
@@ -319,11 +329,18 @@ def predict_comment(text: str, tokenizer, model):
     with torch.no_grad():
         logits = model(**inputs).logits
     probs = torch.softmax(logits, dim=1)[0].tolist()
-    id2label = model.config.id2label
+    
+    id2label = getattr(model.config, "id2label", {0: "GENUINE", 1: "BOT_OR_SPAM"})
     label_id = int(np.argmax(probs))
-    label = id2label[label_id] if label_id in id2label else id2label[str(label_id)]
+    if label_id in id2label:
+        label = id2label[label_id]
+    elif str(label_id) in id2label:
+        label = id2label[str(label_id)]
+    else:
+        label = "BOT_OR_SPAM" if label_id == 1 else "GENUINE"
+        
     prob_genuine = probs[0]
-    prob_bot = probs[1]
+    prob_bot = probs[1] if len(probs) > 1 else (1.0 - prob_genuine)
     return label, prob_genuine, prob_bot
 
 
@@ -1119,7 +1136,7 @@ else:
         st.markdown("---")
         st.subheader("Training & Performance Analysis")
         
-        st.caption(f"Source: huggingface.co/{COMMENT_MODEL_REPO}")
+        st.caption(f"Source: [huggingface.co/{COMMENT_MODEL_REPO}/tree/main/{COMMENT_MODEL_SUBFOLDER}](https://huggingface.co/{COMMENT_MODEL_REPO}/tree/main/{COMMENT_MODEL_SUBFOLDER})")
 
         if not TRANSFORMERS_AVAILABLE:
             st.warning("`transformers` / `torch` are not installed in this environment — add them to "
