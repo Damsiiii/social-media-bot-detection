@@ -36,11 +36,24 @@ st.set_page_config(
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(BASE_DIR, "models")
-DATA_DIR = os.path.join(BASE_DIR, "data")
 
-# Path to graphs directory (in the parent directory of prototype)
-GRAPHS_DIR = os.path.join(os.path.dirname(BASE_DIR), "graphs")
+def resolve_directory(dir_name):
+    """Find directory across possible paths (prototype subfolder, repo root, working dir)."""
+    candidates = [
+        os.path.join(BASE_DIR, dir_name),
+        os.path.join(os.path.dirname(BASE_DIR), dir_name),
+        os.path.join(os.getcwd(), dir_name),
+        os.path.join(os.getcwd(), "prototype", dir_name)
+    ]
+    for p in candidates:
+        if os.path.isdir(p):
+            return p
+    return os.path.join(BASE_DIR, dir_name)
+
+MODELS_DIR = resolve_directory("models")
+DATA_DIR = resolve_directory("data")
+GRAPHS_DIR = resolve_directory("graphs")
+
 INSTAGRAM_GRAPHS_DIR = os.path.join(GRAPHS_DIR, "instagram")
 TWITTER_GRAPHS_DIR = os.path.join(GRAPHS_DIR, "twitter")
 FAKE_COMMENT_GRAPHS_DIR = os.path.join(GRAPHS_DIR, "fake_comment_detection")
@@ -195,14 +208,17 @@ def load_instagram_models():
     ig_dir = os.path.join(MODELS_DIR, "instagram")
     
     # Try to load ANN model
-    try:
-        import tensorflow as tf
-        bundle["ann"] = tf.keras.models.load_model(os.path.join(ig_dir, "instagram_ann.keras"))
-    except ImportError:
-        st.warning("TensorFlow not available - ANN model skipped")
-        bundle["ann"] = None
-    except Exception as e:
-        st.warning(f"Could not load ANN model: {e}")
+    ann_path = os.path.join(ig_dir, "instagram_ann.keras")
+    if os.path.exists(ann_path):
+        try:
+            import tensorflow as tf
+            bundle["ann"] = tf.keras.models.load_model(ann_path)
+        except ImportError:
+            bundle["ann"] = None
+        except Exception as e:
+            st.warning(f"Could not load ANN model: {e}")
+            bundle["ann"] = None
+    else:
         bundle["ann"] = None
     
     # Load traditional ML models
@@ -219,12 +235,20 @@ def load_instagram_models():
             bundle[key] = None
     
     # Load scaler for feature normalization
-    try:
-        df = load_instagram_data()
-        bundle["scaler"] = StandardScaler().fit(df[INSTAGRAM_FEATURES])
-    except Exception as e:
-        st.warning(f"Could not create scaler: {e}")
-        bundle["scaler"] = None
+    scaler_path = os.path.join(ig_dir, "instagram_standard_scaler.pkl")
+    if os.path.exists(scaler_path):
+        try:
+            bundle["scaler"] = joblib.load(scaler_path)
+        except Exception:
+            bundle["scaler"] = None
+
+    if bundle.get("scaler") is None:
+        try:
+            df = load_instagram_data()
+            bundle["scaler"] = StandardScaler().fit(df[INSTAGRAM_FEATURES])
+        except Exception as e:
+            st.warning(f"Could not create scaler: {e}")
+            bundle["scaler"] = None
     
     return bundle
 

@@ -18,7 +18,5 @@ safetensors>=0.4.0
 # Image Processing
 Pillow>=10.0
 
-# Optional: TensorFlow (comment out if Python 3.14 not supported)
-# tensorflow>=2.13  # Use tensorflow-cpu for CPU-only or tensorflow-gpu for CUDA
-# For Python 3.14 compatibility, use:
-# tensorflow-intel>=2.15  # Or wait for official Python 3.14 support
+# Deep Learning / Neural Networks (ANN Model)
+tensorflow-cpu>=2.15
