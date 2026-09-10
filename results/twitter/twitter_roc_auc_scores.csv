@@ -1,6 +1,0 @@
-Model,ROC_AUC
-Random Forest (Profile),0.8189
-XGBoost (Profile),0.8117
-Logistic Regression (Profile),0.7844
-TF-IDF + Logistic Regression (NLP),0.6337
-Graph Convolutional Network (GNN),0.4857

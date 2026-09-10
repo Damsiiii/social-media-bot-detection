@@ -1,2 +1,0 @@
-Model,Category,Accuracy,Precision,Recall,F1 Score
-TF-IDF + Logistic Regression,NLP,0.6004,0.5739,0.3084,0.4012
